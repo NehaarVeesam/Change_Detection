@@ -1,0 +1,52 @@
+name: cd
+
+services:
+  vllm:
+    build:
+      context: .
+      dockerfile: cd-vllm/Dockerfile
+    image: cd-vllm:latest
+    container_name: cd-vllm
+    network_mode: host
+    shm_size: 16gb
+    environment:
+      MODEL_ID: ${MODEL_ID:-Qwen/Qwen3.5-9B}
+      VLLM_PORT: ${VLLM_PORT:-7100}
+      VLLM_MAX_MODEL_LEN: ${VLLM_MAX_MODEL_LEN:-16384}
+      VLLM_GPU_MEMORY_UTILIZATION: ${VLLM_GPU_MEMORY_UTILIZATION:-0.93}
+      VLLM_EXTRA_ARGS: ${VLLM_EXTRA_ARGS:---max-num-seqs 24}
+    volumes:
+      - ${HF_HOME:-${HOME}/.cache/huggingface}:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  data-prep:
+    build:
+      context: .
+      dockerfile: cd-data-prep/Dockerfile
+    image: cd-data-prep:latest
+    volumes:
+      - ${OUTPUT_DIR:-./data/output}:/data
+    entrypoint: ["python", "threejs_patches.py"]
+
+  changes:
+    build:
+      context: .
+      dockerfile: cd-changes/Dockerfile
+    image: cd-changes:latest
+    network_mode: host
+    environment:
+      MODEL_ID: ${MODEL_ID:-Qwen/Qwen3.5-9B}
+      INFERENCE_BACKEND: ${INFERENCE_BACKEND:-vllm}
+      VLLM_START_SERVER: "0"
+      VLLM_BASE_URL: ${VLLM_BASE_URL:-http://127.0.0.1:7100/v1}
+      ENABLE_THINKING: ${ENABLE_THINKING:-0}
+    volumes:
+      - ${OUTPUT_DIR:-./data/output}:/data
+    entrypoint: ["python", "/app/qwen_family.py", "--folder", "/data"]

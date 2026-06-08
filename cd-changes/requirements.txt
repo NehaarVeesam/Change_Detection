@@ -1,0 +1,4 @@
+# Lightweight inference client (calls vLLM over HTTP). No torch/vllm/flash-attn here.
+openai>=1.0.0
+python-dotenv
+packaging

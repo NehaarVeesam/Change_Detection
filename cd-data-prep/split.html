@@ -1,0 +1,361 @@
+<!-- 
+Dual Equirectangular Viewer (Three.js)
+
+Renders two side-by-side equirectangular panorama viewers with support
+for loading image and rotation metadata from JSON files. Exposes UV
+corner sampling functionality used by a Python pipeline to split the
+original panorama into two regions for change detection.
+
+Authors:
+Nehaar Veesam
+-->
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Two Equirectangular Viewers — split4</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #000;
+        overflow: hidden;
+      }
+      .row {
+        display: flex;
+        width: 100vw;
+        height: 100vh;
+      }
+      .pane {
+        flex: 1 1 50%;
+        position: relative;
+      }
+    </style>
+
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div class="row">
+      <div id="left" class="pane"></div>
+      <div id="right" class="pane"></div>
+    </div>
+
+    <script type="module">
+      import * as THREE from "three";
+
+      const loader = new THREE.TextureLoader();
+
+      // Shared look state
+      let isUserInteracting = false;
+      let onPointerDownMouseX = 0,
+        onPointerDownMouseY = 0;
+      let lon = 0,
+        onPointerDownLon = 0;
+      let lat = 0,
+        onPointerDownLat = 0;
+      let phi = 0,
+        theta = 0;
+      const LOOK_RADIUS = 500;
+
+      // Shared raycaster / mouse for UV lookups
+      const raycaster = new THREE.Raycaster();
+      const mouse = new THREE.Vector2();
+
+      function makeViewer(containerEl) {
+        const scene = new THREE.Scene();
+
+        const camera = new THREE.PerspectiveCamera(
+          75,
+          containerEl.clientWidth / containerEl.clientHeight,
+          0.1,
+          5000
+        );
+        camera.position.set(0, 0, 0);
+        camera.up.set(0, 0, 1);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setSize(containerEl.clientWidth, containerEl.clientHeight);
+        renderer.toneMapping = THREE.NoToneMapping;
+        containerEl.appendChild(renderer.domElement);
+
+        const geom = new THREE.SphereGeometry(1, 128, 128);
+        const mat = new THREE.MeshBasicMaterial({ side: THREE.BackSide });
+        const sphere = new THREE.Mesh(geom, mat);
+        sphere.scale.set(-1000, 1000, 1000);
+        scene.add(sphere);
+
+        // equirectangular texture dimensions
+        let imageDimensions = { width: 0, height: 0 };
+
+        function setImage(url) {
+          loader.load(url, (texture) => {
+            texture.colorSpace = THREE.SRGBColorSpace;
+            mat.map = texture;
+            mat.needsUpdate = true;
+            if (texture.image) {
+              imageDimensions.width = texture.image.width;
+              imageDimensions.height = texture.image.height;
+            }
+            render();
+          });
+        }
+
+        function setRotationDeg(rx, ry, rz) {
+          sphere.rotation.set(
+            (rx * Math.PI) / 180,
+            (ry * Math.PI) / 180,
+            (rz * Math.PI) / 180
+          );
+          render();
+        }
+
+        function resize() {
+          camera.aspect = containerEl.clientWidth / containerEl.clientHeight;
+          camera.updateProjectionMatrix();
+          renderer.setSize(containerEl.clientWidth, containerEl.clientHeight);
+          render();
+        }
+
+        function render() {
+          renderer.render(scene, camera);
+        }
+
+        return {
+          scene,
+          camera,
+          renderer,
+          containerEl,
+          resize,
+          render,
+          setImage,
+          setRotationDeg,
+          sphere,
+          imageDimensions,
+        };
+      }
+
+      const left = makeViewer(document.getElementById("left"));
+      const right = makeViewer(document.getElementById("right"));
+
+      const panes = [left.containerEl, right.containerEl];
+      panes.forEach((pane) => {
+        pane.style.touchAction = "none";
+        pane.addEventListener("pointerdown", onPointerDown);
+      });
+
+      document.addEventListener("wheel", onDocumentMouseWheel, {
+        passive: true,
+      });
+      window.addEventListener("resize", () => {
+        left.resize();
+        right.resize();
+      });
+
+      function onPointerDown(event) {
+        if (event.isPrimary === false) return;
+        isUserInteracting = true;
+        onPointerDownMouseX = event.clientX;
+        onPointerDownMouseY = event.clientY;
+        onPointerDownLon = lon;
+        onPointerDownLat = lat;
+
+        document.addEventListener("pointermove", onPointerMove);
+        document.addEventListener("pointerup", onPointerUp);
+      }
+      function onPointerMove(event) {
+        if (event.isPrimary === false || !isUserInteracting) return;
+        lon = (onPointerDownMouseX - event.clientX) * 0.1 + onPointerDownLon;
+        lat = (event.clientY - onPointerDownMouseY) * 0.1 + onPointerDownLat;
+        updateLookAndRenderBoth();
+      }
+      function onPointerUp(event) {
+        if (event.isPrimary === false) return;
+        isUserInteracting = false;
+        document.removeEventListener("pointermove", onPointerMove);
+        document.removeEventListener("pointerup", onPointerUp);
+      }
+      function onDocumentMouseWheel(event) {
+        const fovL = THREE.MathUtils.clamp(
+          left.camera.fov + event.deltaY * 0.05,
+          10,
+          75
+        );
+        const fovR = THREE.MathUtils.clamp(
+          right.camera.fov + event.deltaY * 0.05,
+          10,
+          75
+        );
+        left.camera.fov = fovL;
+        right.camera.fov = fovR;
+        left.camera.updateProjectionMatrix();
+        right.camera.updateProjectionMatrix();
+        renderBoth();
+      }
+      function updateLookAndRenderBoth() {
+        lat = Math.max(-85, Math.min(85, lat));
+        phi = THREE.MathUtils.degToRad(90 - lat);
+        theta = THREE.MathUtils.degToRad(lon);
+        const x = LOOK_RADIUS * Math.sin(phi) * Math.cos(theta);
+        const y = LOOK_RADIUS * Math.cos(phi);
+        const z = LOOK_RADIUS * Math.sin(phi) * Math.sin(theta);
+        left.camera.lookAt(x, z, y);
+        right.camera.lookAt(x, z, y);
+        renderBoth();
+      }
+      function renderBoth() {
+        left.render();
+        right.render();
+      }
+
+      // ---------- JSON-based loading ----------
+
+      async function fetchMeta(url) {
+        const res = await fetch(url, { cache: "no-store" });
+        if (!res.ok) throw new Error(`Failed to fetch: ${url}`);
+        return res.json();
+      }
+
+      function defaultImagePathFromMeta(metaUrl, name) {
+        try {
+          const u = new URL(metaUrl, location.href);
+          const parts = u.pathname.split("/");
+          parts.pop(); 
+          parts.pop(); 
+          const root = parts.join("/") + "/";
+          return `${root}images/${name}`;
+        } catch (e) {
+          return `images/${name}`;
+        }
+      }
+
+      function resolveEntry(json, name, metaUrl) {
+        const entry = json?.[name] || {};
+        const fallback = defaultImagePathFromMeta(metaUrl, name);
+        const path = entry.path || entry.file || entry.imageUrl || fallback;
+
+        let rx, ry, rz;
+        if (Array.isArray(entry.rotation) && entry.rotation.length >= 3) {
+          [rx, ry, rz] = entry.rotation;
+        } else if (
+          entry.rotation &&
+          ["x", "y", "z"].every((k) => entry.rotation[k] !== undefined)
+        ) {
+          ({ x: rx, y: ry, z: rz } = entry.rotation);
+        } else {
+          rx = ry = rz = 0;
+        }
+
+        return { path, rotation: { x: rx, y: ry, z: rz } };
+      }
+
+      // ---------- client (x,y) -> pano pixel helper ----------
+      function uvFromClient(viewer, clientX, clientY) {
+        const rect = viewer.renderer.domElement.getBoundingClientRect();
+
+        const nx = ((clientX - rect.left) / rect.width) * 2 - 1;
+        const ny = -((clientY - rect.top) / rect.height) * 2 + 1;
+
+        mouse.set(nx, ny);
+        raycaster.setFromCamera(mouse, viewer.camera);
+
+        const hits = raycaster.intersectObject(viewer.sphere, false);
+        if (!hits.length || !hits[0].uv) return null;
+
+        const uv = hits[0].uv;
+        let texW = viewer.imageDimensions.width;
+        let texH = viewer.imageDimensions.height;
+
+        if (!texW || !texH) {
+          const map = viewer.sphere.material && viewer.sphere.material.map;
+          if (map && map.image) {
+            texW = map.image.width;
+            texH = map.image.height;
+          }
+        }
+        if (!texW || !texH) return null;
+
+        let px = uv.x * texW;
+        let py = uv.y * texH;
+
+        px = px % texW;
+        py = texH - py;
+
+        return {
+          u: uv.x,
+          v: uv.y,
+          x: px,
+          y: py,
+          texWidth: texW,
+          texHeight: texH,
+        };
+      }
+
+      // ---------- Public API ----------
+      window.viewer = {
+        async loadByNameFromSources({ left: L, right: R }) {
+          if (L?.metaUrl && L?.name) {
+            const j = await fetchMeta(L.metaUrl);
+            const m = resolveEntry(j, L.name, L.metaUrl);
+            left.setImage(m.path);
+            left.setRotationDeg(m.rotation.x, m.rotation.y, m.rotation.z);
+          }
+          if (R?.metaUrl && R?.name) {
+            const j = await fetchMeta(R.metaUrl);
+            const m = resolveEntry(j, R.name, R.metaUrl);
+            right.setImage(m.path);
+            right.setRotationDeg(m.rotation.x, m.rotation.y, m.rotation.z);
+          }
+          lon = 0;
+          lat = 0;
+          updateLookAndRenderBoth();
+        },
+
+        rotateYaw(stepDeg) {
+          lon += Number(stepDeg) || 0;
+          updateLookAndRenderBoth();
+        },
+
+        renderOnce() {
+          renderBoth();
+        },
+
+        // This is what Python calls
+        getCornerUVs() {
+          const w = window.innerWidth;
+          const h = window.innerHeight;
+          const halfW = w / 2;
+          const eps = 0.5;
+
+          function sample(viewer, cx, cy) {
+            return uvFromClient(viewer, cx, cy);
+          }
+
+          return {
+            left: {
+              tl: sample(left, eps, eps),
+              tr: sample(left, halfW - eps, eps),
+              bl: sample(left, eps, h - eps),
+              br: sample(left, halfW - eps, h - eps),
+            },
+            right: {
+              tl: sample(right, halfW + eps, eps),
+              tr: sample(right, w - eps, eps),
+              bl: sample(right, halfW + eps, h - eps),
+              br: sample(right, w - eps, h - eps),
+            },
+          };
+        },
+      };
+    </script>
+  </body>
+</html>

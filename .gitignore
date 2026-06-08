@@ -1,0 +1,6 @@
+data
+*.pt
+*.pth
+*.ckpt
+.git
+.env
