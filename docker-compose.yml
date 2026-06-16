@@ -50,3 +50,19 @@ services:
     volumes:
       - ${OUTPUT_DIR:-./data/output}:/data
     entrypoint: ["python", "/app/qwen_family.py", "--folder", "/data"]
+
+  gdsam:
+    build:
+      context: .
+      dockerfile: cd-gdsam/Dockerfile
+    image: cd-gdsam:latest
+    volumes:
+      - ${OUTPUT_DIR:-./data/output}:/data
+    entrypoint: ["python", "gdsam.py", "--folder", "/data"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

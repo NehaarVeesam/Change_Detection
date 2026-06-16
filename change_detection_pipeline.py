@@ -5,6 +5,7 @@ Orchestrates:
   1. Data preparation  — extract aligned patch pairs from two panoramas
   2. vLLM server       — model inference backend (optional managed start)
   3. Change detection  — run VLM on patch pairs, write results to output dir
+  4. GD-SAM stage      — segment detected objects with Grounded-DINO + SAM2
 
 Usage:
   python change_detection_pipeline.py \
@@ -32,6 +33,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 
 DATA_PREP_IMAGE = "cd-data-prep:latest"
 CHANGES_IMAGE = "cd-changes:latest"
+GDSAM_IMAGE = "cd-gdsam:latest"
 VLLM_IMAGE = "cd-vllm:latest"
 VLLM_CONTAINER = "cd-vllm"
 
@@ -169,6 +171,23 @@ def run_change_detection(args: argparse.Namespace) -> None:
     run_command(cmd, "Change_Detection")
 
 
+def run_gdsam_stage(args: argparse.Namespace) -> None:
+    output_dir = Path(args.output_dir).resolve()
+    cmd = [
+        "docker",
+        "run",
+        "--rm",
+        "--gpus",
+        "all",
+        "-v",
+        f"{output_dir}:/data",
+        GDSAM_IMAGE,
+        "--folder",
+        "/data",
+    ]
+    run_command(cmd, "GD_SAM")
+
+
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the change detection pipeline")
     parser.add_argument("--new-image", required=True, help="Path to the NEW panorama image")
@@ -239,6 +258,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
             wait_for_vllm_health(port)
 
         run_change_detection(args)
+        run_gdsam_stage(args)
         print(f"Pipeline complete. Results in {output_dir}")
     finally:
         if manage_vllm:

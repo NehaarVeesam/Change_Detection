@@ -1,0 +1,36 @@
+pip
+yapf
+timm
+onnx
+tqdm
+dill
+exif
+boto3
+wheel
+scipy
+addict
+pillow
+gradio
+pyproj
+piexif
+pynvml
+# open3d wheels are not available on some Python versions (e.g. 3.13).
+# Keep it optional so core gdsam runtime deps can still be installed.
+open3d; python_version < "3.13"
+tzdata
+requests
+setuptools
+matplotlib
+ultralytics
+segments-ai
+onnxruntime
+transformers==4.39.3
+numpy==1.26.4; python_version < "3.13"
+numpy>=2.1.0; python_version >= "3.13"
+supervision==0.25.1
+opencv-contrib-python
+hf_xet
+distinctipy
+moviepy
+pycocotools
+psutil
